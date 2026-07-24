@@ -64,6 +64,7 @@ Saturation and fluid-constant helpers:
 | `PQ` | pressure, quality (0–1) | saturation / two-phase |
 | `PH` | pressure, enthalpy | iterative flash; handles two-phase automatically |
 | `PS` | pressure, entropy | iterative flash; handles two-phase automatically |
+| `HS` | enthalpy, entropy | nested iterative flash; handles two-phase automatically |
 | `TD` | temperature, density | direct EOS evaluation |
 
 Letter order is flexible (`"PT"` behaves like `"TP"` with the inputs matched to the letters). Cp, Cv, SoundSpeed, and Compressibility are undefined inside the two-phase dome and return an error there, as in REFPROP.
@@ -115,6 +116,65 @@ The Peng-Robinson EOS is the standard workhorse of process simulation, but it is
 - Refrigerant ideal-gas heat capacities use linear fits, adding ~1–2 % to their cp/h/s.
 
 Not included: transport properties (viscosity, thermal conductivity, surface tension), mixtures with composition input, and melting/sublimation lines. If you need reference-quality water/steam, an IAPWS-IF97 implementation can be added alongside this — ask and it can be wired in so `"Water"` automatically uses it.
+
+## Combustion module (Combustion.gs)
+
+An optional second script file adds unburned air-fuel mixture properties and combustion stoichiometry. Install it the same way: paste `Combustion.gs` as an additional file in the same Apps Script project (**File → + → Script**, or just append it below the main code). It requires `Code.gs` since it reuses the property engine.
+
+Mixture functions take `(Fuel, Units, T, P, Ratio, RatioType)`. The fuel ratio can be given four ways via `RatioType`: `"AFR"` (kg air/kg fuel, default), `"FAR"` (kg fuel/kg air), `"PHI"` (equivalence ratio), or `"LAMBDA"` (excess-air ratio). Components are mixed with Dalton partial-pressure real-gas mixing, so the entropy of mixing is included automatically, and a guard raises an error if the fuel's partial pressure would exceed its vapor pressure (condensing mixture).
+
+| Function | Returns |
+|---|---|
+| `MixtureEnthalpy(fuel,u,T,P,r,rt)` | h of the unburned mixture [kJ/kg mix] |
+| `MixtureEntropy(fuel,u,T,P,r,rt)` | s incl. mixing entropy [kJ/kg-K] |
+| `MixtureCp` / `MixtureCv` | heat capacities [kJ/kg-K] |
+| `MixtureDensity` | real-gas mixture density [kg/m³] |
+| `MixtureMolarMass(fuel,r,rt)` | g/mol |
+| `StoichAFR(fuel)` | stoichiometric air-fuel mass ratio |
+| `EquivalenceRatio(fuel,AFR)` / `AFRFromPhi(fuel,phi)` | φ ↔ AFR conversions |
+| `LowerHeatingValue(fuel,[u])` | LHV [kJ/kg fuel] |
+| `MixtureHeatRelease(fuel,r,rt,[u])` | LHV × burned fuel fraction [kJ/kg mixture]; air-limited when rich |
+| `FuelList()` | spills fuels with AFR_stoich and LHV |
+
+Supported fuels: methane, ethane, propane, n-butane, isobutane, ethylene, propylene, hydrogen, CO, methanol, ethanol, ammonia (aliases like `"CH4"`, `"R290"`, `"NH3"` work).
+
+Examples:
+
+```
+=StoichAFR("Methane")                                    → 17.24
+=MixtureEnthalpy("Methane","SIC",25,101.325,1,"PHI")     → h of stoich charge
+=MixtureCp("Propane","SI",350,200,0.9,"PHI")
+=MixtureHeatRelease("Methane",1,"PHI")                   → 2742 kJ per kg of charge
+```
+
+**Reference-state caveat:** `MixtureEnthalpy`/`MixtureEntropy` are *sensible* values built on each component's own reference state. Differences are valid for a **fixed composition** (compression, preheating: h₂−h₁ at the same AFR). Do not difference enthalpies across different fuel ratios or across combustion to obtain heat release — use `LowerHeatingValue`/`MixtureHeatRelease` for the chemical energy term.
+
+### Combustion products (burned gas)
+
+For states *downstream of the combustor* — turbines, nozzles, exhaust heat exchangers — use the `Products*` functions, which model the complete-combustion product mixture (CO2, H2O, N2, excess O2, Ar) at the specified fuel ratio (φ ≤ 1; rich mixtures are rejected since CO/H2 equilibrium isn't modeled). Because composition is fixed for a given fuel + ratio, enthalpy and entropy **differences across a device are fully valid** — this is the correct tool for turbine work per kg of gas.
+
+| Function | Returns |
+|---|---|
+| `ProductsEnthalpy(fuel,u,T,P,r,rt)` | h of burned gas [kJ/kg] |
+| `ProductsEntropy(fuel,u,T,P,r,rt)` | s of burned gas [kJ/kg-K] |
+| `ProductsCp` / `ProductsCv` | heat capacities |
+| `ProductsDensity` | density [kg/m³] |
+| `ProductsTemperature(fuel,"PH"/"PS",u,P,val,r,rt)` | T from P+h or P+s (isentropic calcs) |
+| `ProductsMolarMass(fuel,r,rt)` | g/mol |
+| `ProductsComposition(fuel,r,rt)` | spills species mole fractions |
+
+Isentropic turbine example — methane at φ = 0.45, inlet 1450 K / 1200 kPa, exit 110 kPa:
+
+```
+B1: =ProductsEnthalpy("Methane","SI",1450,1200,0.45,"PHI")      ' h1
+B2: =ProductsEntropy("Methane","SI",1450,1200,0.45,"PHI")       ' s1
+B3: =ProductsTemperature("Methane","PS","SI",110,B2,0.45,"PHI") ' T2s ≈ 823 K
+B4: =ProductsEnthalpy("Methane","SI",B3,110,0.45,"PHI")         ' h2s
+B5: =B1-B4                                                       ' ideal work ≈ 780 kJ/kg
+B6: =B5*0.9                                                      ' actual work at eta_s = 0.9
+```
+
+A dew-point guard raises an error if water in the products would condense (relevant below ~330 K for near-stoichiometric mixtures), and the ideal-gas cp polynomials are reliable to roughly 1800 K — fine for turbine *expansion* calculations, but treat states much above that (e.g. stoichiometric flame temperatures) with caution.
 
 ## Troubleshooting
 

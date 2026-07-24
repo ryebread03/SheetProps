@@ -377,9 +377,43 @@ function _flash(f, code, a, b) {
     }
     case 'PH': return _flashPX(f, a, b, 'h');
     case 'PS': return _flashPX(f, a, b, 's');
+    case 'HS': return _flashHS(f, a, b);
     default:
-      throw new Error('Unsupported input pair "' + code + '". Supported: TP, TQ, PQ, PH, PS, TD.');
+      throw new Error('Unsupported input pair "' + code + '". Supported: TP, TQ, PQ, PH, PS, HS, TD.');
   }
+}
+
+/* H + S flash: outer bisection on ln(P), inner PH flash.
+ * At constant h, (ds/dP) = -v/T < 0, so entropy is monotonically
+ * decreasing in P and bisection is safe (single-phase and two-phase). */
+function _flashHS(f, H, S) {
+  var lnLo = Math.log(10);       // 10 Pa
+  var lnHi = Math.log(5e8);      // 500 MPa
+  function sAtLnP(lnP) {
+    var fl = _flash(f, 'PH', Math.exp(lnP), H);
+    if (fl.ph === 2) return (1 - fl.q) * fl.L.s + fl.q * fl.V.s;
+    return fl.st.s;
+  }
+  var gLo = null, gHi = null;
+  // pull bounds inward if the PH flash cannot converge at the extremes
+  for (var i = 0; i < 25 && gLo === null; i++) {
+    try { gLo = sAtLnP(lnLo) - S; } catch (e) { lnLo += 0.7; }
+  }
+  for (var j = 0; j < 25 && gHi === null; j++) {
+    try { gHi = sAtLnP(lnHi) - S; } catch (e) { lnHi -= 0.7; }
+  }
+  if (gLo === null || gHi === null || gLo * gHi > 0) {
+    throw new Error('No solution found for the given H and S with ' + f.name +
+      ' (state outside computable range).');
+  }
+  var lnM = lnLo;
+  for (var it = 0; it < 100; it++) {
+    lnM = 0.5 * (lnLo + lnHi);
+    var gM = sAtLnP(lnM) - S;
+    if (gM === 0 || (lnHi - lnLo) < 1e-11) break;
+    if (gLo * gM < 0) { lnHi = lnM; gHi = gM; } else { lnLo = lnM; gLo = gM; }
+  }
+  return _flash(f, 'PH', Math.exp(lnM), H);
 }
 
 /* P + (h or s) flash */
@@ -508,7 +542,8 @@ function _prop(fluid, inpCode, units, p1, p2, key) {
   else if ('P' in vals && 'H' in vals) fl = _flash(f, 'PH', vals.P, vals.H);
   else if ('P' in vals && 'S' in vals) fl = _flash(f, 'PS', vals.P, vals.S);
   else if ('T' in vals && 'D' in vals) fl = _flash(f, 'TD', vals.T, vals.D);
-  else throw new Error('Unsupported input pair "' + code + '". Supported: TP, TQ, PQ, PH, PS, TD.');
+  else if ('H' in vals && 'S' in vals) fl = _flash(f, 'HS', vals.H, vals.S);
+  else throw new Error('Unsupported input pair "' + code + '". Supported: TP, TQ, PQ, PH, PS, HS, TD.');
 
   return _out(_getProp(f, fl, key), key, u);
 }
@@ -520,7 +555,7 @@ function _prop(fluid, inpCode, units, p1, p2, key) {
 /**
  * Density of a fluid. Example: =Density("R134a","TP","SI",300,500)
  * @param {string} fluid Fluid name (e.g. "Water", "R134a", "CO2")
- * @param {string} inpCode Input pair: "TP","TQ","PQ","PH","PS","TD"
+ * @param {string} inpCode Input pair: "TP","TQ","PQ","PH","PS","HS","TD"
  * @param {string} units "SI" (K,kPa), "SIC" (degC,kPa) or "E" (degF,psia). Optional, default "SI".
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
@@ -532,7 +567,7 @@ function Density(fluid, inpCode, units, prop1, prop2) { return _prop(fluid, inpC
 /**
  * Specific volume. Example: =Volume("Water","TP","SI",400,101.325)
  * @param {string} fluid Fluid name
- * @param {string} inpCode Input pair: "TP","TQ","PQ","PH","PS","TD"
+ * @param {string} inpCode Input pair: "TP","TQ","PQ","PH","PS","HS","TD"
  * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
@@ -544,7 +579,7 @@ function Volume(fluid, inpCode, units, prop1, prop2) { return _prop(fluid, inpCo
 /**
  * Specific enthalpy. Example: =Enthalpy("Water","PQ","SI",101.325,1)
  * @param {string} fluid Fluid name
- * @param {string} inpCode Input pair: "TP","TQ","PQ","PH","PS","TD"
+ * @param {string} inpCode Input pair: "TP","TQ","PQ","PH","PS","HS","TD"
  * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
@@ -556,7 +591,7 @@ function Enthalpy(fluid, inpCode, units, prop1, prop2) { return _prop(fluid, inp
 /**
  * Specific entropy. Example: =Entropy("N2","TP","SI",300,101.325)
  * @param {string} fluid Fluid name
- * @param {string} inpCode Input pair: "TP","TQ","PQ","PH","PS","TD"
+ * @param {string} inpCode Input pair: "TP","TQ","PQ","PH","PS","HS","TD"
  * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
@@ -568,7 +603,7 @@ function Entropy(fluid, inpCode, units, prop1, prop2) { return _prop(fluid, inpC
 /**
  * Specific internal energy.
  * @param {string} fluid Fluid name
- * @param {string} inpCode Input pair: "TP","TQ","PQ","PH","PS","TD"
+ * @param {string} inpCode Input pair: "TP","TQ","PQ","PH","PS","HS","TD"
  * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
@@ -580,7 +615,7 @@ function InternalEnergy(fluid, inpCode, units, prop1, prop2) { return _prop(flui
 /**
  * Isobaric (constant-pressure) heat capacity. Single-phase states only.
  * @param {string} fluid Fluid name
- * @param {string} inpCode Input pair: "TP","PH","PS","TD"
+ * @param {string} inpCode Input pair: "TP","PH","PS","HS","TD"
  * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
@@ -592,7 +627,7 @@ function Cp(fluid, inpCode, units, prop1, prop2) { return _prop(fluid, inpCode, 
 /**
  * Isochoric (constant-volume) heat capacity. Single-phase states only.
  * @param {string} fluid Fluid name
- * @param {string} inpCode Input pair: "TP","PH","PS","TD"
+ * @param {string} inpCode Input pair: "TP","PH","PS","HS","TD"
  * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
@@ -604,7 +639,7 @@ function Cv(fluid, inpCode, units, prop1, prop2) { return _prop(fluid, inpCode, 
 /**
  * Speed of sound. Single-phase states only.
  * @param {string} fluid Fluid name
- * @param {string} inpCode Input pair: "TP","PH","PS","TD"
+ * @param {string} inpCode Input pair: "TP","PH","PS","HS","TD"
  * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
@@ -616,7 +651,7 @@ function SoundSpeed(fluid, inpCode, units, prop1, prop2) { return _prop(fluid, i
 /**
  * Compressibility factor Z = Pv/RT. Single-phase states only.
  * @param {string} fluid Fluid name
- * @param {string} inpCode Input pair: "TP","PH","PS","TD"
+ * @param {string} inpCode Input pair: "TP","PH","PS","HS","TD"
  * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
@@ -628,7 +663,7 @@ function Compressibility(fluid, inpCode, units, prop1, prop2) { return _prop(flu
 /**
  * Temperature from an input pair. Example: =Temperature("Propane","PH","SI",1000,650)
  * @param {string} fluid Fluid name
- * @param {string} inpCode Input pair: "PQ","PH","PS" (also accepts "TP","TQ","TD")
+ * @param {string} inpCode Input pair: "PQ","PH","PS","HS" (also accepts "TP","TQ","TD")
  * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
@@ -640,7 +675,7 @@ function Temperature(fluid, inpCode, units, prop1, prop2) { return _prop(fluid, 
 /**
  * Pressure from an input pair. Example: =Pressure("CO2","TQ","SI",273.15,0)
  * @param {string} fluid Fluid name
- * @param {string} inpCode Input pair: "TQ","TD" (also accepts "TP","PQ","PH","PS")
+ * @param {string} inpCode Input pair: "TQ","TD","HS" (also accepts "TP","PQ","PH","PS")
  * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
  * @param {number} prop1 First input property
  * @param {number} prop2 Second input property
