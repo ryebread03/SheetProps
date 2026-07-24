@@ -136,7 +136,7 @@ Mixture functions take `(Fuel, Units, T, P, Ratio, RatioType)`. The fuel ratio c
 | `MixtureHeatRelease(fuel,r,rt,[u])` | LHV × burned fuel fraction [kJ/kg mixture]; air-limited when rich |
 | `FuelList()` | spills fuels with AFR_stoich and LHV |
 
-Supported fuels: methane, ethane, propane, n-butane, isobutane, ethylene, propylene, hydrogen, CO, methanol, ethanol, ammonia (aliases like `"CH4"`, `"R290"`, `"NH3"` work).
+Supported fuels: methane, ethane, propane, n-butane, isobutane, ethylene, propylene, hydrogen, CO, methanol, ethanol, ammonia, plus pseudo-fuels **Diesel** (surrogate C12.3H22.2, AFRst = 14.51) and **JP-5** (surrogate C12H23, AFRst = 14.67; aliases `"Jet-A"`, `"JP8"`, `"Kerosene"`). Aliases like `"CH4"`, `"R290"`, `"NH3"` work. The liquid-fuel pseudo-fluids exist primarily for combustion stoichiometry and products; their pure-fluid EOS properties are rough dodecane-like estimates.
 
 Examples:
 
@@ -159,7 +159,8 @@ For states *downstream of the combustor* — turbines, nozzles, exhaust heat exc
 | `ProductsEntropy(fuel,u,T,P,r,rt)` | s of burned gas [kJ/kg-K] |
 | `ProductsCp` / `ProductsCv` | heat capacities |
 | `ProductsDensity` | density [kg/m³] |
-| `ProductsTemperature(fuel,"PH"/"PS",u,P,val,r,rt)` | T from P+h or P+s (isentropic calcs) |
+| `ProductsTemperature(fuel,"PH"/"PS"/"HS",u,p1,p2,r,rt)` | T from P+h, P+s, or h+s |
+| `ProductsPressure(fuel,"HS",u,h,s,r,rt)` | P from h+s (closes turbine loops) |
 | `ProductsMolarMass(fuel,r,rt)` | g/mol |
 | `ProductsComposition(fuel,r,rt)` | spills species mole fractions |
 
@@ -174,7 +175,22 @@ B5: =B1-B4                                                       ' ideal work �
 B6: =B5*0.9                                                      ' actual work at eta_s = 0.9
 ```
 
+Turbine analysis with a known work output and isentropic efficiency (note the sign convention: h2s = h1 − W_t/η_t, which lies *below* the actual exit enthalpy):
+
+```
+h1  = ProductsEnthalpy("JP5","SI",T1,P1,r,"PHI")
+s1  = ProductsEntropy("JP5","SI",T1,P1,r,"PHI")
+h2  = h1 - Wt
+h2s = h1 - Wt/eta_t
+P2  = ProductsPressure("JP5","HS","SI",h2s,s1,r,"PHI")
+T2  = ProductsTemperature("JP5","PH","SI",P2,h2,r,"PHI")
+```
+
 A dew-point guard raises an error if water in the products would condense (relevant below ~330 K for near-stoichiometric mixtures), and the ideal-gas cp polynomials are reliable to roughly 1800 K — fine for turbine *expansion* calculations, but treat states much above that (e.g. stoichiometric flame temperatures) with caution.
+
+### Validating against other tools
+
+Pure-fluid functions: compare against the **NIST WebBook** (free, browser-based, reference-quality isotherm/saturation tables) or **CoolProp** (free, open-source Helmholtz-EOS library with Python/Excel/MATLAB wrappers); NIST also offers **mini-REFPROP**, a free demo of the real thing with a limited fluid set. Combustion products: **Cantera** (free Python library; build a CO2/H2O/N2/O2/Ar mixture at your computed mole fractions and compare h, s, cp) or **NASA CEA** for equilibrium composition and flame temperatures. Air-standard cross-checks against Keenan & Kaye-style gas tables are also a quick sanity test at low pressure.
 
 ## Troubleshooting
 

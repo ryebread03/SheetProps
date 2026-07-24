@@ -42,14 +42,17 @@ var FUEL_ATOMS = {
   CO:        {C:1, H:0,  O:1},
   METHANOL:  {C:1, H:4,  O:1},
   ETHANOL:   {C:2, H:6,  O:1},
-  AMMONIA:   {C:0, H:3,  O:0, N:1}
+  AMMONIA:   {C:0, H:3,  O:0, N:1},
+  DIESEL:    {C:12.3, H:22.2, O:0},   // No.2 diesel surrogate
+  JP5:       {C:12,   H:23,   O:0}    // JP-5 / Jet-A / JP-8 surrogate
 };
 
 /* Lower heating values [kJ/kg fuel] (standard literature values, ~+/-0.5%) */
 var FUEL_LHV = {
   METHANE: 50010, ETHANE: 47480, PROPANE: 46350, BUTANE: 45740,
   ISOBUTANE: 45590, ETHYLENE: 47160, PROPYLENE: 45780, HYDROGEN: 119960,
-  CO: 10100, METHANOL: 19930, ETHANOL: 26830, AMMONIA: 18600
+  CO: 10100, METHANOL: 19930, ETHANOL: 26830, AMMONIA: 18600,
+  DIESEL: 42800, JP5: 43000
 };
 
 var O2_IN_AIR = 0.20947;   // mole fraction O2 in dry air
@@ -518,38 +521,10 @@ function ProductsDensity(fuel, units, temp, pres, ratio, ratioType) {
   return _prodProp(fuel, units, temp, pres, ratio, ratioType, 'D');
 }
 
-/**
- * Temperature of combustion products from P + enthalpy ("PH") or
- * P + entropy ("PS"). Enables isentropic turbine/nozzle calculations:
- *   T2s = ProductsTemperature("Methane","PS","SI", P2, s1, ratio, rt)
- * @param {string} fuel Fuel name
- * @param {string} inpCode "PH" or "PS"
- * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
- * @param {number} pres Pressure
- * @param {number} propval Enthalpy [kJ/kg | Btu/lb] or entropy [kJ/kg-K | Btu/lb-R]
- * @param {number} ratio Fuel-ratio value (phi <= 1)
- * @param {string} ratioType "AFR" (default), "FAR", "PHI" or "LAMBDA"
- * @return {number} Temperature [K], [degC] or [degF]
- * @customfunction
- */
-function ProductsTemperature(fuel, inpCode, units, pres, propval, ratio, ratioType) {
-  var fk = _fuelKey(fuel);
-  if (typeof units === 'number') {
-    ratioType = ratio; ratio = propval; propval = pres; pres = units; units = 'SI';
-  }
-  var u = _normUnits(units);
-  var code = String(inpCode).toUpperCase().replace(/[^A-Z]/g, '');
-  if (code !== 'PH' && code !== 'PS' && code !== 'HP' && code !== 'SP') {
-    throw new Error('ProductsTemperature supports input codes "PH" or "PS".');
-  }
-  var key = (code.indexOf('H') >= 0) ? 'H' : 'S';
-  var Pp = _Pin(_num(pres, 'pressure'), u);
-  var Xt = _num(propval, key === 'H' ? 'enthalpy' : 'entropy');
-  Xt = key === 'H' ? (u === 'E' ? Xt * 2.326 : Xt) : (u === 'E' ? Xt * 4.1868 : Xt);
-  var pc = _prodComp(fk, _toAFR(fk, ratio, ratioType));
-
-  var Tlo = 220, Thi = 2400;   // K; property monotonic in T at fixed P
-  var g = function (T) { return _prodPropTP(pc, T, Pp, key) - Xt; };
+/* T [K] from (P [Pa], target h or s [SI mass]) for a fixed product mix */
+function _prodTfromPX(pc, P, X, key) {
+  var Tlo = 220, Thi = 2400;
+  var g = function (T) { return _prodPropTP(pc, T, P, key) - X; };
   var glo, ghi;
   for (var i = 0; i < 20; i++) {           // lift lower bound above dew point
     try { glo = g(Tlo); break; } catch (e) { Tlo += 15; }
@@ -566,7 +541,101 @@ function ProductsTemperature(fuel, inpCode, units, pres, propval, ratio, ratioTy
     if (gm === 0 || (Thi - Tlo) < 1e-8 * Tm) break;
     if (glo * gm < 0) { Thi = Tm; } else { Tlo = Tm; glo = gm; }
   }
-  return _out(Tm, 'T', u);
+  return Tm;
+}
+
+/* (P, T) from (h, s) for a fixed product mix. At constant h, entropy falls
+ * monotonically with pressure, so bisection on ln P is safe. */
+function _prodPfromHS(pc, H, S) {
+  var lnLo = Math.log(100), lnHi = Math.log(1e8);   // 0.1 kPa .. 100 MPa
+  function sAt(lnP) {
+    var P = Math.exp(lnP);
+    return _prodPropTP(pc, _prodTfromPX(pc, P, H, 'H'), P, 'S') - S;
+  }
+  var gLo = null, gHi = null;
+  for (var i = 0; i < 20 && gLo === null; i++) {
+    try { gLo = sAt(lnLo); } catch (e) { lnLo += 0.6; }
+  }
+  for (var j = 0; j < 20 && gHi === null; j++) {
+    try { gHi = sAt(lnHi); } catch (e) { lnHi -= 0.6; }
+  }
+  if (gLo === null || gHi === null || gLo * gHi > 0) {
+    throw new Error('No product-gas pressure found for the given H and S ' +
+      '(state outside computable range).');
+  }
+  var lnM = lnLo;
+  for (var it = 0; it < 90; it++) {
+    lnM = 0.5 * (lnLo + lnHi);
+    var gm = sAt(lnM);
+    if (gm === 0 || (lnHi - lnLo) < 1e-11) break;
+    if (gLo * gm < 0) { lnHi = lnM; } else { lnLo = lnM; gLo = gm; }
+  }
+  var Pf = Math.exp(lnM);
+  return { P: Pf, T: _prodTfromPX(pc, Pf, H, 'H') };
+}
+
+/* Shared parse for products inversion functions */
+function _prodInvParse(fuel, inpCode, units, prop1, prop2, ratio, ratioType) {
+  var fk = _fuelKey(fuel);
+  if (typeof units === 'number') {
+    ratioType = ratio; ratio = prop2; prop2 = prop1; prop1 = units; units = 'SI';
+  }
+  var u = _normUnits(units);
+  var code = String(inpCode).toUpperCase().replace(/[^A-Z]/g, '');
+  if (code === 'HP' || code === 'SP' || code === 'SH') {   // reversed order
+    code = code.charAt(1) + code.charAt(0);
+    var tmp = prop1; prop1 = prop2; prop2 = tmp;
+  }
+  var pc = _prodComp(fk, _toAFR(fk, ratio, ratioType));
+  function toH(x) { return u === 'E' ? x * 2.326 : x; }
+  function toS(x) { return u === 'E' ? x * 4.1868 : x; }
+  var out = { u: u, code: code, pc: pc };
+  if (code === 'PH') { out.P = _Pin(_num(prop1, 'pressure'), u); out.X = toH(_num(prop2, 'enthalpy')); out.key = 'H'; }
+  else if (code === 'PS') { out.P = _Pin(_num(prop1, 'pressure'), u); out.X = toS(_num(prop2, 'entropy')); out.key = 'S'; }
+  else if (code === 'HS') { out.H = toH(_num(prop1, 'enthalpy')); out.S = toS(_num(prop2, 'entropy')); }
+  else throw new Error('Supported input codes: "PH", "PS", "HS".');
+  return out;
+}
+
+/**
+ * Temperature of combustion products from "PH" (P, h), "PS" (P, s) or
+ * "HS" (h, s). Enables isentropic turbine/nozzle calculations:
+ *   T2s = ProductsTemperature("JP5","PS","SI", P2, s1, ratio, rt)
+ * @param {string} fuel Fuel name
+ * @param {string} inpCode "PH", "PS" or "HS"
+ * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
+ * @param {number} prop1 Pressure (PH/PS) or enthalpy (HS)
+ * @param {number} prop2 Enthalpy (PH), entropy (PS/HS)
+ * @param {number} ratio Fuel-ratio value (phi <= 1)
+ * @param {string} ratioType "AFR" (default), "FAR", "PHI" or "LAMBDA"
+ * @return {number} Temperature [K], [degC] or [degF]
+ * @customfunction
+ */
+function ProductsTemperature(fuel, inpCode, units, prop1, prop2, ratio, ratioType) {
+  var a = _prodInvParse(fuel, inpCode, units, prop1, prop2, ratio, ratioType);
+  var T = (a.code === 'HS') ? _prodPfromHS(a.pc, a.H, a.S).T
+                            : _prodTfromPX(a.pc, a.P, a.X, a.key);
+  return _out(T, 'T', a.u);
+}
+
+/**
+ * Pressure of combustion products from "HS" (h, s) - or trivially from
+ * "PH"/"PS". Closes the isentropic-turbine loop:
+ *   P2 = ProductsPressure("JP5","HS","SI", h2s, s1, ratio, rt)
+ * @param {string} fuel Fuel name
+ * @param {string} inpCode "HS" (also accepts "PH","PS")
+ * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
+ * @param {number} prop1 Enthalpy (HS) or pressure (PH/PS)
+ * @param {number} prop2 Entropy (HS/PS) or enthalpy (PH)
+ * @param {number} ratio Fuel-ratio value (phi <= 1)
+ * @param {string} ratioType "AFR" (default), "FAR", "PHI" or "LAMBDA"
+ * @return {number} Pressure [kPa] or [psia]
+ * @customfunction
+ */
+function ProductsPressure(fuel, inpCode, units, prop1, prop2, ratio, ratioType) {
+  var a = _prodInvParse(fuel, inpCode, units, prop1, prop2, ratio, ratioType);
+  var Ppa = (a.code === 'HS') ? _prodPfromHS(a.pc, a.H, a.S).P : a.P;
+  return _out(Ppa / 1000, 'P', a.u);
 }
 
 /**

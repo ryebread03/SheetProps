@@ -68,7 +68,9 @@ var FLUID_DB = {
   R125:      {name:'R-125',           M:0.1200210, Tc:339.173, Pc:3.6177e6, w:0.3052,  cp:[35.0,  0.200, 0, 0]},
   R22:       {name:'R-22',            M:0.0864680, Tc:369.295, Pc:4.9899e6, w:0.22082, cp:[24.0,  0.110, 0, 0]},
   R1234YF:   {name:'R-1234yf',        M:0.1140416, Tc:367.85,  Pc:3.3822e6, w:0.276,   cp:[28.0,  0.250, 0, 0]},
-  R410A:     {name:'R-410A (pseudo)', M:0.0725854, Tc:344.494, Pc:4.9012e6, w:0.296,   cp:[20.0,  0.135, 0, 0]}
+  R410A:     {name:'R-410A (pseudo)', M:0.0725854, Tc:344.494, Pc:4.9012e6, w:0.296,   cp:[20.0,  0.135, 0, 0]},
+  DIESEL:    {name:'Diesel (pseudo C12.3H22.2)', M:0.1701090, Tc:658.1, Pc:1.817e6, w:0.574, cp:[120.0, 0.51, 0, 0]},
+  JP5:       {name:'JP-5 (pseudo C12H23)',       M:0.1673170, Tc:660.0, Pc:1.900e6, w:0.560, cp:[118.0, 0.50, 0, 0]}
 };
 
 var FLUID_ALIASES = {
@@ -90,7 +92,9 @@ var FLUID_ALIASES = {
   NH3:'AMMONIA', R717:'AMMONIA',
   MEOH:'METHANOL', CH3OH:'METHANOL',
   ETOH:'ETHANOL', C2H5OH:'ETHANOL',
-  R134:'R134A'
+  R134:'R134A',
+  JETA:'JP5', JP8:'JP5', KEROSENE:'JP5', JETFUEL:'JP5',
+  DIESELFUEL:'DIESEL'
 };
 
 /* ========================================================================
