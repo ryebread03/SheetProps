@@ -175,6 +175,13 @@ B5: =B1-B4                                                       ' ideal work �
 B6: =B5*0.9                                                      ' actual work at eta_s = 0.9
 ```
 
+**Fuel burn / cycle analysis:** never compute the fuel-air ratio by differencing `ProductsEnthalpy` against `Enthalpy("Air",...)` across the combustor — those are on different reference states, and because the offset varies with composition (mostly water content), the error would vary with cycle pressure ratio and distort trend studies. Use `FuelAirRatio(fuel, units, T3, T4, [etaB])`, which solves the adiabatic combustor energy balance anchored at 298.15 K (where LHV is defined), iterating so the product composition is consistent with the returned f. Assumptions: fuel enters near 298 K (each 100 K of fuel preheat above that reduces the true f by roughly 0.5 %), water leaves as vapor (LHV convention), complete combustion. Validated against Cantera adiabatic-flame solutions to 0.2 % at 1400 K and 0.6 % at 1690 K (residual = dissociation, which complete-combustion models exclude).
+
+```
+f  = FuelAirRatio("JP5","SI", T3, T4, 0.995)     ' combustor balance
+' then use ratio = 1/f with ratioType "AFR" in all Products* functions
+```
+
 Turbine analysis with a known work output and isentropic efficiency (note the sign convention: h2s = h1 − W_t/η_t, which lies *below* the actual exit enthalpy):
 
 ```

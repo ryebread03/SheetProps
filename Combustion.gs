@@ -670,3 +670,72 @@ function ProductsComposition(fuel, ratio, ratioType) {
   }
   return rows;
 }
+
+/* ========================================================================
+ *  COMBUSTOR ENERGY BALANCE
+ * ====================================================================== */
+
+/* Ideal-gas sensible enthalpy of the product mix between 298.15 K and T,
+ * [kJ/kg]. Uses the NASA/hybrid cp0 directly (water as vapor, matching the
+ * LHV convention) so it is valid below the dew point where the real-gas
+ * path is blocked. Pressure dependence of h is negligible here. */
+function _prodDh298(pc, T) {
+  var sum = 0;
+  for (var i = 0; i < pc.comp.length; i++) {
+    var c = pc.comp[i];
+    var w = c.x * c.f.M / pc.Mmix;
+    sum += w * (_h0(c.f, T) - _h0(c.f, 298.15)) / c.f.M / 1000;
+  }
+  return sum;
+}
+
+/**
+ * Fuel-air mass ratio required to heat combustion air from T3 to a fixed
+ * turbine-inlet temperature T4 (adiabatic combustor energy balance,
+ * anchored at 298.15 K where LHV is defined; fuel assumed to enter near
+ * 298 K, water as vapor). Iterates so the product composition is
+ * consistent with the returned f. This is the correct way to compute
+ * fuel burn - do NOT difference ProductsEnthalpy against Enthalpy("Air"),
+ * as those are on different reference states.
+ * Example: =FuelAirRatio("JP5","SI",700,1400,1)   (etaB = 1)
+ * @param {string} fuel Fuel name
+ * @param {string} units "SI", "SIC" or "E" (optional, default "SI")
+ * @param {number} t3 Compressor-exit / combustor-inlet air temperature
+ * @param {number} t4 Combustor-exit / turbine-inlet temperature
+ * @param {number} etaB Combustion efficiency 0-1 (optional, default 1)
+ * @return {number} f = kg fuel / kg air (AFR = 1/f)
+ * @customfunction
+ */
+function FuelAirRatio(fuel, units, t3, t4, etaB) {
+  var fk = _fuelKey(fuel);
+  if (typeof units === 'number') { etaB = t4; t4 = t3; t3 = units; units = 'SI'; }
+  var u = _normUnits(units);
+  var T3 = _Tin(_num(t3, 'T3'), u);
+  var T4 = _Tin(_num(t4, 'T4'), u);
+  if (etaB === null || etaB === undefined || etaB === '') etaB = 1;
+  _num(etaB, 'etaB');
+  if (etaB <= 0 || etaB > 1) throw new Error('etaB must be in (0, 1].');
+  if (T4 <= T3) throw new Error('T4 must exceed T3.');
+
+  var fAir = FLUID_DB.AIR;
+  var dhA = (_h0(fAir, T3) - _h0(fAir, 298.15)) / fAir.M / 1000;   // kJ/kg air
+  var LHV = FUEL_LHV[fk];
+  var stAFR = _stoichAFRcalc(fk);
+
+  // initial guess from a cp*dT estimate, then fixed-point iterate on
+  // composition:  f*LHV*etaB + dhA = (1+f)*dh_products(T4; f)
+  var f = 1.15 * (T4 - T3) / LHV;
+  for (var it = 0; it < 50; it++) {
+    var AFR = 1 / f;
+    if (AFR < stAFR) throw new Error('Required fuel exceeds stoichiometric ' +
+      '(T4 too high for this T3); rich combustion is not modeled.');
+    var pc = _prodComp(fk, AFR);
+    // solve f*LHV*etaB + dhA = (1+f)*dhP  ->  f = (dhP - dhA) / (LHV*etaB - dhP)
+    var dhP = _prodDh298(pc, T4);
+    var fNew = (dhP - dhA) / (LHV * etaB - dhP);
+    if (fNew <= 0) throw new Error('No physical fuel-air ratio found (check T3, T4, LHV).');
+    if (Math.abs(fNew - f) < 1e-12) { f = fNew; break; }
+    f = fNew;
+  }
+  return f;
+}
