@@ -186,7 +186,7 @@ P2  = ProductsPressure("JP5","HS","SI",h2s,s1,r,"PHI")
 T2  = ProductsTemperature("JP5","PH","SI",P2,h2,r,"PHI")
 ```
 
-A dew-point guard raises an error if water in the products would condense (relevant below ~330 K for near-stoichiometric mixtures), and the ideal-gas cp polynomials are reliable to roughly 1800 K — fine for turbine *expansion* calculations, but treat states much above that (e.g. stoichiometric flame temperatures) with caution.
+A dew-point guard raises an error if water in the products would condense (relevant below ~330 K for near-stoichiometric mixtures), and product thermodynamics use NASA 7-term polynomials valid to 3500 K. Note the model is *frozen-composition*: above ~1600 K, equilibrium codes such as NASA CEA report slightly higher effective cp (~2-3 % at 1700 K) because they include shifting dissociation (NO, OH). For turbine expansion the frozen assumption is generally the physically appropriate one, since those recombination reactions are kinetically slow in a real exhaust.
 
 ### Validating against other tools
 
